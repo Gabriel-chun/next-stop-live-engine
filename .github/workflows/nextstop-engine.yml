@@ -1,0 +1,76 @@
+name: Next Stop Live Engine
+# Copy ONLY this file into a newly created, empty public repo's .github/workflows/.
+# This template has NO public data upload, artifact, cache, release, or pull_request job.
+on:
+  # Only the initial installation commit triggers the controlled smoke run.
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/nextstop-engine.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */2 * * *"
+permissions:
+  contents: read
+concurrency:
+  group: nextstop-private-engine
+  cancel-in-progress: false
+jobs:
+  execute:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.event.head_commit.message == 'bootstrap: install controlled Next Stop Live Engine') ||
+       (github.event_name == 'schedule' && vars.NEXTSTOP_ENGINE_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    container:
+      image: mcr.microsoft.com/playwright:v1.56.1-noble
+    steps:
+      - name: Check private repository access and clone
+        shell: bash
+        env:
+          NEXTSTOP_PRIVATE_REPO_TOKEN: ${{ secrets.NEXTSTOP_PRIVATE_REPO_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$NEXTSTOP_PRIVATE_REPO_TOKEN"
+          auth="$(printf 'x-access-token:%s' "$NEXTSTOP_PRIVATE_REPO_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          # Never send raw private repository output to public Actions logs.
+          {
+            curl --silent --show-error --fail -H "Authorization: Bearer $NEXTSTOP_PRIVATE_REPO_TOKEN" https://api.github.com/repos/Gabriel-chun/threads-cli-nextstop |
+              python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["private"] is True and d["full_name"].lower()=="gabriel-chun/threads-cli-nextstop"'
+            git -c "http.https://github.com/.extraHeader=Authorization: Basic $auth" clone --depth=1 --branch main --single-branch https://github.com/Gabriel-chun/threads-cli-nextstop.git private
+          } >/tmp/nextstop-private-clone.log 2>&1 || { echo "Private repository clone or visibility check failed"; exit 1; }
+          echo "Private checkout verified"
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: private/go.mod
+          cache: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "20"
+      - name: Execute private research pipeline
+        working-directory: private
+        shell: bash
+        env:
+          NEXTSTOP_PRIVATE_REPO_TOKEN: ${{ secrets.NEXTSTOP_PRIVATE_REPO_TOKEN }}
+          NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
+          NEXTSTOP_EVENT_EMIT_TOKEN: ${{ secrets.NEXTSTOP_EVENT_EMIT_TOKEN }}
+        run: |
+          set -euo pipefail
+          # No public raw logs, shell trace, artifacts, or private caches.
+          umask 077
+          for f in collector/engine/*.sh; do bash -n "$f"; done
+          python3 -m py_compile collector/engine/due.py
+          if bash collector/engine/run-private-engine.sh 3>&1 >/tmp/nextstop-private-run.log 2>&1; then
+            echo "Private pipeline and mirror completed"
+          else
+            echo "::error::Private pipeline failed. Inspect the private archive timestamps and service health. Raw logs are not published."
+            exit 1
+          fi
+      - name: Remove ephemeral private checkout and logs
+        if: always()
+        shell: bash
+        run: |
+          rm -rf private /tmp/nextstop-private-run.log /tmp/nextstop-private-clone.log

@@ -23,7 +23,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'push' && github.event.head_commit.message == 'bootstrap: validate private Dashboard health PR'))
+       (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health'))
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -39,8 +39,9 @@ jobs:
           ref=main
           expected="$REQUESTED_SHA"
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
-            ref=dashboard/pipeline-health
-            expected=7830cc9353e26ad116088f7b38e95fe53f6301f8
+            ref=main
+            expected=58760fee5885a95831ca1d981cfbbca5f64adb99
+            DEPLOY_REQUESTED=true
           fi
           if [[ "$DEPLOY_REQUESTED" == true ]]; then
             [[ "$ref" == main && "$expected" =~ ^[0-9a-f]{40}$ ]] || { echo "Deployment requires the reviewed private main SHA"; exit 1; }
@@ -84,7 +85,7 @@ jobs:
           unset NEXTSTOP_LOCAL_ARCHIVE_FALLBACK
           check cloudflare-build npm run build:vinext
       - name: Deploy existing production Worker
-        if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+        if: (github.event_name == 'workflow_dispatch' && inputs.deploy == true) || (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health')
         working-directory: private/dashboard
         shell: bash
         env:
@@ -102,7 +103,7 @@ jobs:
             exit 1
           fi
       - name: Production smoke
-        if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+        if: (github.event_name == 'workflow_dispatch' && inputs.deploy == true) || (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health')
         working-directory: private/dashboard
         shell: bash
         env:

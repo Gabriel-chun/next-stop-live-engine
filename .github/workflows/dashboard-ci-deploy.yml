@@ -1,0 +1,122 @@
+name: Dashboard CI and Cloudflare Deploy
+on:
+  push:
+    branches: [main]
+    paths: [".github/workflows/dashboard-ci-deploy.yml"]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy validated private main to the existing production Worker
+        type: boolean
+        default: false
+      expected_sha:
+        description: Expected private main commit SHA (required for deployment)
+        type: string
+        required: false
+permissions:
+  contents: read
+concurrency:
+  group: nextstop-dashboard-production
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'push' && github.event.head_commit.message == 'bootstrap: validate private Dashboard health PR'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - name: Clone verified private source
+        shell: bash
+        env:
+          NEXTSTOP_PRIVATE_REPO_TOKEN: ${{ secrets.NEXTSTOP_PRIVATE_REPO_TOKEN }
+          REQUESTED_SHA: ${{ inputs.expected_sha }
+          DEPLOY_REQUESTED: ${{ inputs.deploy }
+        run: |
+          set -euo pipefail
+          umask 077
+          ref=main
+          expected="$REQUESTED_SHA"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            ref=dashboard/pipeline-health
+            expected=7830cc9353e26ad116088f7b38e95fe53f6301f8
+          fi
+          if [[ "$DEPLOY_REQUESTED" == true ]]; then
+            [[ "$ref" == main && "$expected" =~ ^[0-9a-f]{40}$ ]] || { echo "Deployment requires the reviewed private main SHA"; exit 1; }
+          fi
+          auth="$(printf 'x-access-token:%s' "$NEXTSTOP_PRIVATE_REPO_TOKEN" | base64 -w0)"
+          echo "::add-mask::$auth"
+          {
+            curl --silent --show-error --fail -H "Authorization: Bearer $NEXTSTOP_PRIVATE_REPO_TOKEN" https://api.github.com/repos/Gabriel-chun/threads-cli-nextstop |
+              python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["private"] is True and d["full_name"].lower()=="gabriel-chun/threads-cli-nextstop"'
+            git -c "http.https://github.com/.extraHeader=Authorization: Basic $auth" clone --depth=1 --single-branch --branch "$ref" https://github.com/Gabriel-chun/threads-cli-nextstop.git private
+            if [[ -n "$expected" ]]; then [[ "$(git -C private rev-parse HEAD)" == "$expected" ]]; fi
+          } >/tmp/nsl-dashboard-clone.log 2>&1 || { echo "Private source verification failed"; exit 1; }
+          echo "Private source verified"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "22"
+      - name: Install and validate private Dashboard
+        working-directory: private/dashboard
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          check(){
+            local label="$1"; shift
+            if "$@" >>/tmp/nsl-dashboard-ci.log 2>&1; then echo "$label: passed"; else echo "::error::$label failed (private output suppressed)"; exit 1; fi
+          }
+          check install npm install --no-audit --no-fund
+          check unit-tests npx tsx --test lib/mcpEvents/*.test.ts lib/signalDeckFeedback.test.ts lib/reviewQuota.test.ts lib/reviewArchive.test.ts lib/quietAtlas.test.ts lib/exploreAtlas.test.ts lib/keywordNetworkHistory.test.ts lib/explorationObjects.test.ts lib/reviewLedger.test.ts lib/writeSecurity.test.ts lib/collectorQuality.test.ts lib/i18n.test.ts
+          check next-build npm run build
+          export NEXTSTOP_LOCAL_ARCHIVE_FALLBACK=1
+          npm run start -- -p 3100 >/tmp/nsl-dashboard-server.log 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for i in {1..30}; do
+            if curl -sSf http://127.0.0.1:3100/ >/dev/null 2>&1; then ready=true; break; fi
+            sleep 1
+          done
+          [[ "$ready" == true ]] || { echo "::error::Local Dashboard failed to start"; exit 1; }
+          check runtime-mcp node scripts/test-mcp-events.mjs
+          unset NEXTSTOP_LOCAL_ARCHIVE_FALLBACK
+          check cloudflare-build npm run build:vinext
+      - name: Deploy existing production Worker
+        if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+        working-directory: private/dashboard
+        shell: bash
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }
+        run: |
+          set -euo pipefail
+          test -n "$CLOUDFLARE_API_TOKEN" && test -n "$CLOUDFLARE_ACCOUNT_ID" || { echo "::error::Set Cloudflare deployment secrets in Engine repository"; exit 1; }
+          umask 077
+          # Existing runtime secrets and KV bindings are retained by the established CI deploy command.
+          if npm run deploy:ci >/tmp/nsl-dashboard-deploy.log 2>&1; then
+            echo "Production Worker deployment succeeded"
+          else
+            echo "::error::Production deploy failed (private output suppressed)"
+            exit 1
+          fi
+      - name: Production smoke
+        if: github.event_name == 'workflow_dispatch' && inputs.deploy == true
+        working-directory: private/dashboard
+        shell: bash
+        env:
+          MCP_TEST_URL: https://threads-cli-nextstop.gabrielchun336.workers.dev/api/mcp
+        run: |
+          set -euo pipefail
+          curl --silent --show-error --fail --retry 3 https://threads-cli-nextstop.gabrielchun336.workers.dev/ >/dev/null
+          if node scripts/test-mcp-events.mjs >/tmp/nsl-dashboard-smoke.log 2>&1; then
+            echo "Production MCP smoke passed"
+          else
+            echo "::error::Production MCP smoke failed"
+            exit 1
+          fi
+      - name: Clean private checkout
+        if: always()
+        shell: bash
+        run: rm -rf private /tmp/nsl-dashboard-*.log

@@ -9,7 +9,8 @@ on:
       - ".github/workflows/nextstop-engine.yml"
   workflow_dispatch:
   schedule:
-    - cron: "17 */2 * * *"
+    # 02:17, 05:17, 08:17 ... Asia/Taipei. Stays inactive until NEXTSTOP_ENGINE_ENABLED is true.
+    - cron: "17 */3 * * *"
 permissions:
   contents: read
 concurrency:

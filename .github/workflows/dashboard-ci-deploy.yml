@@ -85,7 +85,9 @@ jobs:
           unset NEXTSTOP_LOCAL_ARCHIVE_FALLBACK
           check cloudflare-build npm run build:vinext
       - name: Deploy existing production Worker
-        if: (github.event_name == 'workflow_dispatch' && inputs.deploy == true) || (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health')
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.deploy == true) ||
+          (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health')
         working-directory: private/dashboard
         shell: bash
         env:
@@ -103,7 +105,9 @@ jobs:
             exit 1
           fi
       - name: Production smoke
-        if: (github.event_name == 'workflow_dispatch' && inputs.deploy == true) || (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health')
+        if: >-
+          (github.event_name == 'workflow_dispatch' && inputs.deploy == true) ||
+          (github.event_name == 'push' && github.event.head_commit.message == 'deploy: validate and release merged Pipeline Health')
         working-directory: private/dashboard
         shell: bash
         env:

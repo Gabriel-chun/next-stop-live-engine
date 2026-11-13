@@ -40,7 +40,7 @@ jobs:
           expected="$REQUESTED_SHA"
           if [[ "$GITHUB_EVENT_NAME" == push ]]; then
             ref=main
-            expected=58760fee5885a95831ca1d981cfbbca5f64adb99
+            expected=335e7a0d335285d9875518bdd9a9a76e75c72d57
             DEPLOY_REQUESTED=true
           fi
           if [[ "$DEPLOY_REQUESTED" == true ]]; then

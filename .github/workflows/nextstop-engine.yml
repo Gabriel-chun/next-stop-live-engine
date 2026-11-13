@@ -8,6 +8,11 @@ on:
     paths:
       - ".github/workflows/nextstop-engine.yml"
   workflow_dispatch:
+    inputs:
+      force_collect:
+        description: Force a fresh collection for recovery verification
+        type: boolean
+        default: false
   schedule:
     - cron: "17 */2 * * *"
 permissions:
@@ -20,7 +25,7 @@ jobs:
     if: >-
       github.ref == 'refs/heads/main' &&
       (github.event_name == 'workflow_dispatch' ||
-       (github.event_name == 'push' && github.event.head_commit.message == 'bootstrap: install controlled Next Stop Live Engine') ||
+       (github.event_name == 'push' && (github.event.head_commit.message == 'bootstrap: install controlled Next Stop Live Engine' || github.event.head_commit.message == 'recovery: verify Notion ZIP sync and language exploration')) ||
        (github.event_name == 'schedule' && vars.NEXTSTOP_ENGINE_ENABLED == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 55
@@ -57,6 +62,7 @@ jobs:
           NEXTSTOP_PRIVATE_REPO_TOKEN: ${{ secrets.NEXTSTOP_PRIVATE_REPO_TOKEN }}
           NOTION_TOKEN: ${{ secrets.NOTION_TOKEN }}
           NEXTSTOP_EVENT_EMIT_TOKEN: ${{ secrets.NEXTSTOP_EVENT_EMIT_TOKEN }}
+          NEXTSTOP_FORCE_COLLECT: ${{ (github.event_name == 'workflow_dispatch' && inputs.force_collect) || (github.event_name == 'push' && github.event.head_commit.message == 'recovery: verify Notion ZIP sync and language exploration') }}
         run: |
           set -euo pipefail
           # No public raw logs, shell trace, artifacts, or private caches.

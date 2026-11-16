@@ -9,8 +9,9 @@ on:
       - ".github/workflows/nextstop-engine.yml"
   workflow_dispatch:
   schedule:
-    # 02:17, 05:17, 08:17 ... Asia/Taipei. Stays inactive until NEXTSTOP_ENGINE_ENABLED is true.
-    - cron: "17 */3 * * *"
+    # Hourly wake-up because GitHub drops most scheduled slots; the private due check still
+    # collects only every three hours. Stays inactive until NEXTSTOP_ENGINE_ENABLED is true.
+    - cron: "17 * * * *"
 permissions:
   contents: read
 concurrency:
